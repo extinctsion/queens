@@ -7,7 +7,7 @@ import GameScreen from '../screens/GameScreen';
 
 export type RootStackParamList = {
   Home: undefined;
-  Levels: undefined;
+  Levels: { fromNewGame?: boolean } | undefined;
   Settings: undefined;
   Game: { level: number };
 };

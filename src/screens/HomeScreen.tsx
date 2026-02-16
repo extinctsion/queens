@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   StyleSheet,
   Text,
@@ -47,8 +48,28 @@ export default function HomeScreen() {
   }
 
   async function handleNewGame() {
-    await saveGameProgress(DEFAULT_PROGRESS);
-    navigation.navigate('Levels');
+    if (hasProgress) {
+      Alert.alert(
+        'Reset Progress',
+        'Starting a new game will reset all your progress. Are you sure?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Yes, Reset',
+            style: 'destructive',
+            onPress: async () => {
+              await saveGameProgress(DEFAULT_PROGRESS);
+              setHasProgress(false);
+              setCurrentLevel(1);
+              navigation.navigate('Levels', { fromNewGame: true });
+            },
+          },
+        ]
+      );
+    } else {
+      await saveGameProgress(DEFAULT_PROGRESS);
+      navigation.navigate('Levels', { fromNewGame: true });
+    }
   }
 
   function handleLevels() {
