@@ -70,7 +70,7 @@ export default function HomeScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.titleSection}>
-        <Text style={styles.title}>Queens</Text>
+        <Text style={styles.title}>N-Queens</Text>
         <Text style={styles.subtitle}>Place your queens wisely</Text>
       </View>
 

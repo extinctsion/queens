@@ -1,4 +1,4 @@
-# Home Page - Queens Game
+# Home Page - N-Queens Game
 
 ## Overview
 The home page is the main entry point of the Queens game. It displays the game title and a set of navigation buttons. The layout of buttons adapts based on whether the player has previous progress.
@@ -6,7 +6,7 @@ The home page is the main entry point of the Queens game. It displays the game t
 ## Screen Layout
 
 ### Title Section
-- Game title: **"Queens"** displayed prominently at the top center of the screen.
+- Game title: **"N-Queens"** displayed prominently at the top center of the screen.
 - Subtitle: "Place your queens wisely" (optional tagline below the title).
 
 ### Buttons Section
