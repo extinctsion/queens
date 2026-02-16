@@ -16,7 +16,6 @@ The buttons are displayed vertically, centered on the screen. Their visibility d
 The following buttons are shown:
 1. **New Game** - Starts a fresh game, navigates to the Levels page.
 2. **Settings** - Opens the settings screen.
-3. **Exit** - Closes the application.
 
 #### Returning Player (Has Previous Progress)
 The following buttons are shown:
@@ -24,7 +23,6 @@ The following buttons are shown:
 2. **New Game** - Starts a fresh game, navigates to the Levels page.
 3. **Levels** - Opens the Levels page showing all levels with their completion status.
 4. **Settings** - Opens the settings screen.
-5. **Exit** - Closes the application.
 
 ## Button Behavior
 
@@ -34,7 +32,6 @@ The following buttons are shown:
 | New Game   | Resets game progress and navigates to the Levels page with only Level 1 unlocked.          |
 | Levels     | Opens the Levels page showing all 10 levels with locked/unlocked/completed status.         |
 | Settings   | Opens the Settings screen (sound, theme, etc.). Details to be defined later.               |
-| Exit       | Exits/closes the application.                                                              |
 
 ## Progress Detection
 - On app launch, check local storage (AsyncStorage) for saved game progress.
