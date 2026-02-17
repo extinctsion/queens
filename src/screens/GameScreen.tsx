@@ -10,7 +10,7 @@ import {
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { LEVEL_DEFINITIONS } from '../utils/levels';
+import { LEVEL_DEFINITIONS, LEVEL_PUZZLES } from '../utils/levels';
 import {
   DEFAULT_PROGRESS,
   getGameProgress,
@@ -21,43 +21,32 @@ import {
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Game'>;
 
-type CellState = 'empty' | 'preplaced' | 'player';
-
-interface Position {
-  row: number;
-  col: number;
-}
-
-// Pre-placed queen positions for Level 1 (valid 5-queens solution: (0,0),(1,2),(2,4),(3,1),(4,3))
-const LEVEL1_PREPLACED: Position[] = [
-  { row: 0, col: 0 },
-  { row: 1, col: 2 },
-];
+type CellState = 'empty' | 'x' | 'queen' | 'preplaced';
 
 const WALKTHROUGH_STEPS = [
   {
     message:
-      'Welcome to Queens! Your goal is to place queens on the board so that no two queens can attack each other.',
+      'Welcome to Queens! Place exactly one queen in each row, column, and color region.',
   },
   {
     message:
-      "This is your game board. It's a 5×5 grid. You need to place 5 queens total.",
+      "This is your game board. It's a 5\u00d75 grid with 5 color regions. You need to place 5 queens total.",
   },
   {
     message:
-      'Some queens are already placed for you. These gray queens are fixed and cannot be moved.',
+      'Some queens are already placed for you. These queens are fixed and cannot be moved.',
   },
   {
     message:
-      'A queen attacks everything in its row and column. No two queens can share the same row or column.',
+      'Each row and column must have exactly one queen. No two queens can share the same row or column.',
   },
   {
     message:
-      'A queen also attacks along both diagonals. No two queens can share a diagonal.',
+      'Two queens cannot touch each other, not even diagonally. Keep them at least one cell apart!',
   },
   {
     message:
-      'Tap any empty cell to place a queen. Tap a placed queen to remove it. Try to place all 5 queens without conflicts!',
+      "Tap once to mark \u2715 (where a queen can't go). Tap again to place a queen. Tap a queen to remove it.",
   },
   {
     message:
@@ -71,15 +60,21 @@ function formatTimer(totalSeconds: number): string {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-function getConflicts(board: CellState[][], boardSize: number): boolean[][] {
+// --- Conflict detection (LinkedIn Queens rules) ---
+function getConflicts(
+  board: CellState[][],
+  boardSize: number,
+  regionMap: number[][]
+): boolean[][] {
   const conflicts: boolean[][] = Array.from({ length: boardSize }, () =>
     Array(boardSize).fill(false)
   );
 
-  const queens: Position[] = [];
+  // Collect all queen positions
+  const queens: { row: number; col: number }[] = [];
   for (let r = 0; r < boardSize; r++) {
     for (let c = 0; c < boardSize; c++) {
-      if (board[r][c] !== 'empty') {
+      if (board[r][c] === 'queen' || board[r][c] === 'preplaced') {
         queens.push({ row: r, col: c });
       }
     }
@@ -91,9 +86,11 @@ function getConflicts(board: CellState[][], boardSize: number): boolean[][] {
       const b = queens[j];
       const sameRow = a.row === b.row;
       const sameCol = a.col === b.col;
-      const sameDiag = Math.abs(a.row - b.row) === Math.abs(a.col - b.col);
+      const sameRegion = regionMap[a.row][a.col] === regionMap[b.row][b.col];
+      const adjacent =
+        Math.abs(a.row - b.row) <= 1 && Math.abs(a.col - b.col) <= 1;
 
-      if (sameRow || sameCol || sameDiag) {
+      if (sameRow || sameCol || sameRegion || adjacent) {
         conflicts[a.row][a.col] = true;
         conflicts[b.row][b.col] = true;
       }
@@ -107,7 +104,7 @@ function countQueens(board: CellState[][], boardSize: number): number {
   let count = 0;
   for (let r = 0; r < boardSize; r++) {
     for (let c = 0; c < boardSize; c++) {
-      if (board[r][c] !== 'empty') count++;
+      if (board[r][c] === 'queen' || board[r][c] === 'preplaced') count++;
     }
   }
   return count;
@@ -122,9 +119,21 @@ function hasNoConflicts(conflicts: boolean[][], boardSize: number): boolean {
   return true;
 }
 
+// Darken a hex color by a factor (0-1, where 0 = same, 1 = black)
+function darkenColor(hex: string, factor: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const dr = Math.round(r * (1 - factor));
+  const dg = Math.round(g * (1 - factor));
+  const db = Math.round(b * (1 - factor));
+  return `#${dr.toString(16).padStart(2, '0')}${dg.toString(16).padStart(2, '0')}${db.toString(16).padStart(2, '0')}`;
+}
+
 export default function GameScreen({ navigation, route }: Props) {
   const levelNum = route.params.level;
   const levelDef = LEVEL_DEFINITIONS.find((l) => l.level === levelNum)!;
+  const puzzle = LEVEL_PUZZLES[levelNum];
   const { boardSize, numQueens } = levelDef;
 
   const [board, setBoard] = useState<CellState[][]>([]);
@@ -137,10 +146,6 @@ export default function GameScreen({ navigation, route }: Props) {
   const [completionTime, setCompletionTime] = useState(0);
   const [bestTime, setBestTime] = useState<number | null>(null);
   const [isNewBest, setIsNewBest] = useState(false);
-  const [highlightRow, setHighlightRow] = useState<number | null>(null);
-  const [highlightCol, setHighlightCol] = useState<number | null>(null);
-  const [highlightDiags, setHighlightDiags] = useState(false);
-  const [pulseCell, setPulseCell] = useState<Position | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerSecondsRef = useRef(0);
@@ -150,11 +155,11 @@ export default function GameScreen({ navigation, route }: Props) {
   // Initialize board
   const initBoard = useCallback(() => {
     const newBoard: CellState[][] = Array.from({ length: boardSize }, () =>
-      Array(boardSize).fill('empty')
+      Array(boardSize).fill('empty') as CellState[]
     );
 
-    if (levelNum === 1) {
-      for (const pos of LEVEL1_PREPLACED) {
+    if (puzzle) {
+      for (const pos of puzzle.prePlacedPositions) {
         newBoard[pos.row][pos.col] = 'preplaced';
       }
     }
@@ -167,7 +172,7 @@ export default function GameScreen({ navigation, route }: Props) {
     timerSecondsRef.current = 0;
     setShowCompletion(false);
     completedRef.current = false;
-  }, [boardSize, levelNum]);
+  }, [boardSize, puzzle]);
 
   // Load walkthrough state and initialize
   useEffect(() => {
@@ -208,13 +213,11 @@ export default function GameScreen({ navigation, route }: Props) {
           appStateRef.current === 'active' &&
           nextState.match(/inactive|background/)
         ) {
-          // Going to background - pause timer
           stopTimer();
         } else if (
           appStateRef.current.match(/inactive|background/) &&
           nextState === 'active'
         ) {
-          // Coming back - resume timer if not completed
           if (!completedRef.current && !showWalkthrough) {
             startTimer();
           }
@@ -228,7 +231,7 @@ export default function GameScreen({ navigation, route }: Props) {
     }, [showWalkthrough])
   );
 
-  // Pause timer when navigating away
+  // Pause timer when navigating away, resume on focus
   useFocusEffect(
     useCallback(() => {
       if (!completedRef.current && !showWalkthrough) {
@@ -258,52 +261,34 @@ export default function GameScreen({ navigation, route }: Props) {
   function handleWalkthroughNext() {
     const nextStep = walkthroughStep + 1;
 
-    // Clear highlights from previous step
-    setHighlightRow(null);
-    setHighlightCol(null);
-    setHighlightDiags(false);
-    setPulseCell(null);
-
     if (nextStep >= WALKTHROUGH_STEPS.length) {
-      // Walkthrough complete
       setShowWalkthrough(false);
       setWalkthroughCompleted();
       startTimer();
     } else {
       setWalkthroughStep(nextStep);
-
-      // Set highlights for specific steps
-      if (nextStep === 3) {
-        // Step 4: highlight row & column of first pre-placed queen
-        setHighlightRow(LEVEL1_PREPLACED[0].row);
-        setHighlightCol(LEVEL1_PREPLACED[0].col);
-      } else if (nextStep === 4) {
-        // Step 5: highlight diagonals of first pre-placed queen
-        setHighlightRow(null);
-        setHighlightCol(null);
-        setHighlightDiags(true);
-      } else if (nextStep === 5) {
-        // Step 6: pulse an empty cell
-        setPulseCell({ row: 2, col: 4 });
-      }
     }
   }
 
   function handleCellPress(row: number, col: number) {
     if (showWalkthrough || showCompletion) return;
+    if (!puzzle) return;
     if (board[row][col] === 'preplaced') return;
 
     const newBoard = board.map((r) => [...r]);
 
-    if (newBoard[row][col] === 'player') {
+    // Tap cycle: empty → x → queen → empty
+    if (newBoard[row][col] === 'empty') {
+      newBoard[row][col] = 'x';
+    } else if (newBoard[row][col] === 'x') {
+      newBoard[row][col] = 'queen';
+    } else if (newBoard[row][col] === 'queen') {
       newBoard[row][col] = 'empty';
-    } else {
-      newBoard[row][col] = 'player';
     }
 
     setBoard(newBoard);
 
-    const newConflicts = getConflicts(newBoard, boardSize);
+    const newConflicts = getConflicts(newBoard, boardSize, puzzle.regionMap);
     setConflicts(newConflicts);
 
     // Check win condition
@@ -330,8 +315,7 @@ export default function GameScreen({ navigation, route }: Props) {
     };
 
     const previousBest = levelData.bestTime;
-    const newBest =
-      previousBest === null || finalTime < previousBest;
+    const newBest = previousBest === null || finalTime < previousBest;
 
     levelData.completed = true;
     levelData.lastPlayedTime = finalTime;
@@ -348,7 +332,6 @@ export default function GameScreen({ navigation, route }: Props) {
       progress.levels[nextLevelKey].unlocked = true;
     }
 
-    // Update current level
     if (levelNum >= progress.currentLevel) {
       progress.currentLevel = Math.min(levelNum + 1, 10);
     }
@@ -371,12 +354,7 @@ export default function GameScreen({ navigation, route }: Props) {
 
   function handleReplay() {
     setShowCompletion(false);
-    initBoard();
-    completedRef.current = false;
-    stopTimer();
-    setTimerSeconds(0);
-    timerSecondsRef.current = 0;
-    startTimer();
+    handleReset();
   }
 
   function handleNextLevel() {
@@ -389,76 +367,93 @@ export default function GameScreen({ navigation, route }: Props) {
     navigation.navigate('Home');
   }
 
-  // Calculate cell size based on screen width
+  // --- Board layout calculations ---
   const screenWidth = Dimensions.get('window').width;
-  const boardPadding = 32;
-  const cellGap = 2;
-  const totalGaps = (boardSize - 1) * cellGap;
+  const boardPadding = 24;
+  const outerBorder = 3;
   const cellSize = Math.floor(
-    (screenWidth - boardPadding * 2 - totalGaps) / boardSize
+    (screenWidth - boardPadding * 2 - outerBorder * 2) / boardSize
   );
 
-  // Check if a cell is on the diagonal of the first pre-placed queen (for walkthrough step 5)
-  function isOnDiagonal(row: number, col: number): boolean {
-    if (!highlightDiags) return false;
-    const qr = LEVEL1_PREPLACED[0].row;
-    const qc = LEVEL1_PREPLACED[0].col;
-    return (
-      Math.abs(row - qr) === Math.abs(col - qc) && (row !== qr || col !== qc)
-    );
+  // Get region border widths for a cell
+  function getRegionBorders(row: number, col: number) {
+    if (!puzzle) return { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 };
+
+    const region = puzzle.regionMap[row][col];
+    const thick = 2.5;
+    const thin = 0.5;
+
+    return {
+      top:
+        row === 0 || puzzle.regionMap[row - 1][col] !== region ? thick : thin,
+      bottom:
+        row === boardSize - 1 || puzzle.regionMap[row + 1][col] !== region
+          ? thick
+          : thin,
+      left:
+        col === 0 || puzzle.regionMap[row][col - 1] !== region ? thick : thin,
+      right:
+        col === boardSize - 1 || puzzle.regionMap[row][col + 1] !== region
+          ? thick
+          : thin,
+    };
+  }
+
+  function getCellColor(row: number, col: number, cell: CellState): string {
+    if (!puzzle) return '#E8E8E8';
+
+    const regionIdx = puzzle.regionMap[row][col];
+    const baseColor = puzzle.regionColors[regionIdx];
+
+    if (cell === 'queen' || cell === 'preplaced') {
+      return darkenColor(baseColor, 0.15);
+    }
+
+    return baseColor;
   }
 
   function renderCell(row: number, col: number) {
     const cell = board[row]?.[col] ?? 'empty';
     const isConflict = conflicts[row]?.[col] ?? false;
-    const isHighlightedRow = highlightRow === row;
-    const isHighlightedCol = highlightCol === col;
-    const isDiag = isOnDiagonal(row, col);
-    const isPulse =
-      pulseCell && pulseCell.row === row && pulseCell.col === col;
-
-    const isAttackHighlight = isHighlightedRow || isHighlightedCol || isDiag;
-    // Don't highlight the queen cell itself
-    const isQueenCell =
-      highlightRow !== null &&
-      highlightCol !== null &&
-      row === highlightRow &&
-      col === highlightCol;
-    const showAttack = isAttackHighlight && !isQueenCell;
+    const borders = getRegionBorders(row, col);
+    const bgColor = getCellColor(row, col, cell);
 
     return (
       <TouchableOpacity
         key={`${row}-${col}`}
         style={[
-          styles.cell,
           {
             width: cellSize,
             height: cellSize,
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: bgColor,
+            borderTopWidth: borders.top,
+            borderBottomWidth: borders.bottom,
+            borderLeftWidth: borders.left,
+            borderRightWidth: borders.right,
+            borderColor: '#3a3a3a',
           },
-          cell === 'empty' && styles.cellEmpty,
-          cell === 'preplaced' && styles.cellPreplaced,
-          cell === 'player' && styles.cellPlayer,
-          isConflict && styles.cellConflict,
-          showAttack && styles.cellAttack,
-          isDiag && cell === 'empty' && styles.cellAttack,
-          isPulse && styles.cellPulse,
+          isConflict && {
+            backgroundColor: '#FFCCCC',
+            borderColor: '#FF4444',
+            borderTopWidth: 2,
+            borderBottomWidth: 2,
+            borderLeftWidth: 2,
+            borderRightWidth: 2,
+          },
         ]}
         onPress={() => handleCellPress(row, col)}
         activeOpacity={cell === 'preplaced' ? 1 : 0.6}
         disabled={showWalkthrough || showCompletion}
       >
+        {cell === 'x' && <Text style={styles.xMark}>{'\u2715'}</Text>}
         {cell === 'preplaced' && (
-          <Text style={[styles.queenIcon, styles.queenPreplaced]}>
-            {'\u265B'}
-          </Text>
+          <Text style={styles.queenIcon}>{'\u265B'}</Text>
         )}
-        {cell === 'player' && (
+        {cell === 'queen' && (
           <Text
-            style={[
-              styles.queenIcon,
-              styles.queenPlayer,
-              isConflict && styles.queenConflict,
-            ]}
+            style={[styles.queenIcon, isConflict && styles.queenConflict]}
           >
             {'\u265B'}
           </Text>
@@ -469,12 +464,37 @@ export default function GameScreen({ navigation, route }: Props) {
 
   function renderBoard() {
     return (
-      <View style={styles.board}>
+      <View
+        style={[
+          styles.boardOuter,
+          {
+            borderWidth: outerBorder,
+            borderColor: '#3a3a3a',
+            borderRadius: 6,
+            overflow: 'hidden',
+          },
+        ]}
+      >
         {Array.from({ length: boardSize }).map((_, row) => (
-          <View key={row} style={[styles.boardRow, { gap: cellGap }]}>
+          <View key={row} style={styles.boardRow}>
             {Array.from({ length: boardSize }).map((_, col) =>
               renderCell(row, col)
             )}
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  // --- Region color legend ---
+  function renderLegend() {
+    if (!puzzle) return null;
+
+    return (
+      <View style={styles.legend}>
+        {puzzle.regionColors.map((color, idx) => (
+          <View key={idx} style={styles.legendItem}>
+            <View style={[styles.legendSwatch, { backgroundColor: color }]} />
           </View>
         ))}
       </View>
@@ -490,7 +510,7 @@ export default function GameScreen({ navigation, route }: Props) {
 
     return (
       <TouchableOpacity
-        style={styles.walkthroughOverlay}
+        style={styles.overlay}
         activeOpacity={1}
         onPress={handleWalkthroughNext}
       >
@@ -516,7 +536,7 @@ export default function GameScreen({ navigation, route }: Props) {
     if (!showCompletion) return null;
 
     return (
-      <View style={styles.completionOverlay}>
+      <View style={styles.overlay}>
         <View style={styles.completionCard}>
           <Text style={styles.completionTitle}>Level Complete!</Text>
           <Text style={styles.completionTime}>
@@ -532,25 +552,23 @@ export default function GameScreen({ navigation, route }: Props) {
           <View style={styles.completionButtons}>
             {levelNum < 10 && (
               <TouchableOpacity
-                style={[styles.completionBtn, styles.completionBtnPrimary]}
+                style={[styles.cBtn, styles.cBtnPrimary]}
                 onPress={handleNextLevel}
               >
-                <Text style={styles.completionBtnTextPrimary}>
-                  Next Level
-                </Text>
+                <Text style={styles.cBtnPrimaryText}>Next Level</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={[styles.completionBtn, styles.completionBtnSecondary]}
+              style={[styles.cBtn, styles.cBtnSecondary]}
               onPress={handleReplay}
             >
-              <Text style={styles.completionBtnTextSecondary}>Replay</Text>
+              <Text style={styles.cBtnSecondaryText}>Replay</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.completionBtn, styles.completionBtnSecondary]}
+              style={[styles.cBtn, styles.cBtnSecondary]}
               onPress={handleHome}
             >
-              <Text style={styles.completionBtnTextSecondary}>Home</Text>
+              <Text style={styles.cBtnSecondaryText}>Home</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -566,14 +584,26 @@ export default function GameScreen({ navigation, route }: Props) {
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <Text style={styles.backText}>{'\u2190'} Back</Text>
+          <Text style={styles.backText}>{'\u2190'}</Text>
         </TouchableOpacity>
-        <Text style={styles.levelTitle}>Level {levelNum}</Text>
-        <Text style={styles.timer}>{formatTimer(timerSeconds)}</Text>
+        <View style={styles.headerCenter}>
+          <Text style={styles.levelTitle}>Level {levelNum}</Text>
+          <Text style={styles.levelSubtitle}>
+            {levelDef.boardSize}&times;{levelDef.boardSize} &middot;{' '}
+            {levelDef.difficulty}
+          </Text>
+        </View>
+        <View style={styles.timerContainer}>
+          <Text style={styles.timerIcon}>{'\u23F1'}</Text>
+          <Text style={styles.timer}>{formatTimer(timerSeconds)}</Text>
+        </View>
       </View>
 
       {/* Board */}
-      <View style={styles.boardContainer}>{renderBoard()}</View>
+      <View style={styles.boardContainer}>
+        {renderBoard()}
+        {renderLegend()}
+      </View>
 
       {/* Footer */}
       <View style={styles.footer}>
@@ -596,127 +626,152 @@ export default function GameScreen({ navigation, route }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#F5F5F0',
     paddingTop: 50,
   },
+  // --- Header ---
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    marginBottom: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
   backButton: {
-    width: 70,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F0F0F0',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   backText: {
-    color: '#e2b714',
-    fontSize: 16,
+    color: '#333',
+    fontSize: 20,
     fontWeight: '600',
+  },
+  headerCenter: {
+    alignItems: 'center',
   },
   levelTitle: {
-    color: '#e2b714',
-    fontSize: 20,
+    color: '#222',
+    fontSize: 18,
     fontWeight: '700',
-    letterSpacing: 2,
+  },
+  levelSubtitle: {
+    color: '#888',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  timerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0F0F0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 4,
+  },
+  timerIcon: {
+    fontSize: 14,
   },
   timer: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
+    color: '#333',
+    fontSize: 16,
+    fontWeight: '700',
     fontVariant: ['tabular-nums'],
-    width: 70,
-    textAlign: 'right',
   },
+  // --- Board ---
   boardContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 24,
   },
-  board: {
-    gap: 2,
-  },
+  boardOuter: {},
   boardRow: {
     flexDirection: 'row',
   },
-  cell: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: '#2a2a4a',
-  },
-  cellEmpty: {
-    backgroundColor: '#16213e',
-  },
-  cellPreplaced: {
-    backgroundColor: '#2a2a4a',
-  },
-  cellPlayer: {
-    backgroundColor: '#1a3a5c',
-  },
-  cellConflict: {
-    backgroundColor: '#5c1a1a',
-    borderColor: '#ff4444',
-  },
-  cellAttack: {
-    backgroundColor: '#3d1a1a',
-    borderColor: '#773333',
-  },
-  cellPulse: {
-    backgroundColor: '#2a3a1a',
-    borderColor: '#e2b714',
-    borderWidth: 2,
+  xMark: {
+    fontSize: 16,
+    color: '#555',
+    fontWeight: '700',
   },
   queenIcon: {
-    fontSize: 24,
-  },
-  queenPreplaced: {
-    color: '#888',
-  },
-  queenPlayer: {
-    color: '#e2b714',
+    fontSize: 26,
+    color: '#333',
   },
   queenConflict: {
-    color: '#ff4444',
+    color: '#CC0000',
   },
+  // --- Legend ---
+  legend: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 16,
+    gap: 8,
+  },
+  legendItem: {
+    alignItems: 'center',
+  },
+  legendSwatch: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#CCC',
+  },
+  // --- Footer ---
   footer: {
     paddingHorizontal: 20,
     paddingBottom: 40,
+    paddingTop: 16,
     alignItems: 'center',
   },
   resetButton: {
-    backgroundColor: '#16213e',
-    paddingHorizontal: 32,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 36,
     paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#2a2a4a',
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: '#DDD',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
   },
   resetText: {
-    color: '#ccc',
-    fontSize: 16,
+    color: '#555',
+    fontSize: 15,
     fontWeight: '600',
   },
-  // Walkthrough overlay
-  walkthroughOverlay: {
+  // --- Overlays ---
+  overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10,
   },
+  // Walkthrough
   walkthroughCard: {
-    backgroundColor: '#16213e',
-    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
     padding: 28,
     marginHorizontal: 32,
-    borderWidth: 1,
-    borderColor: '#e2b714',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
   },
   walkthroughStepLabel: {
-    color: '#8a8a9a',
+    color: '#AAA',
     fontSize: 12,
     fontWeight: '600',
     marginBottom: 12,
@@ -724,90 +779,83 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   walkthroughMessage: {
-    color: '#fff',
+    color: '#333',
     fontSize: 16,
     lineHeight: 24,
     textAlign: 'center',
     marginBottom: 24,
   },
   walkthroughButton: {
-    backgroundColor: '#e2b714',
-    paddingHorizontal: 32,
+    backgroundColor: '#5EB5E0',
+    paddingHorizontal: 36,
     paddingVertical: 12,
-    borderRadius: 10,
+    borderRadius: 24,
   },
   walkthroughButtonText: {
-    color: '#1a1a2e',
+    color: '#FFF',
     fontSize: 16,
     fontWeight: '700',
   },
-  // Completion overlay
-  completionOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-  },
+  // Completion
   completionCard: {
-    backgroundColor: '#16213e',
-    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
     padding: 32,
     marginHorizontal: 32,
-    borderWidth: 2,
-    borderColor: '#4ecca3',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
     width: '85%',
   },
   completionTitle: {
-    color: '#4ecca3',
-    fontSize: 28,
+    color: '#4CAF50',
+    fontSize: 26,
     fontWeight: '700',
-    letterSpacing: 2,
     marginBottom: 16,
   },
   completionTime: {
-    color: '#fff',
+    color: '#333',
     fontSize: 20,
     fontWeight: '600',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   completionBest: {
-    color: '#8a8a9a',
+    color: '#888',
     fontSize: 16,
-    marginBottom: 8,
+    marginBottom: 6,
   },
   newBestBadge: {
-    color: '#e2b714',
+    color: '#F4845F',
     fontSize: 18,
     fontWeight: '700',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   completionButtons: {
     marginTop: 20,
-    gap: 12,
+    gap: 10,
     width: '100%',
   },
-  completionBtn: {
+  cBtn: {
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: 24,
     alignItems: 'center',
   },
-  completionBtnPrimary: {
-    backgroundColor: '#e2b714',
+  cBtnPrimary: {
+    backgroundColor: '#5EB5E0',
   },
-  completionBtnSecondary: {
-    backgroundColor: '#2a2a4a',
-    borderWidth: 1,
-    borderColor: '#3a3a5a',
+  cBtnSecondary: {
+    backgroundColor: '#F0F0F0',
   },
-  completionBtnTextPrimary: {
-    color: '#1a1a2e',
+  cBtnPrimaryText: {
+    color: '#FFF',
     fontSize: 16,
     fontWeight: '700',
   },
-  completionBtnTextSecondary: {
-    color: '#ccc',
+  cBtnSecondaryText: {
+    color: '#555',
     fontSize: 16,
     fontWeight: '600',
   },
